@@ -3,7 +3,7 @@ import { CesiumIonLoader, Tiles3DLoader } from '@loaders.gl/3d-tiles';
 import { _GeoJSONLoader } from '@loaders.gl/json';
 import { Tileset3D, TILE_TYPE, TILE_CONTENT_STATE } from '@loaders.gl/tiles';
 import { CullingVolume, Plane } from '@math.gl/culling';
-import  { _PerspectiveFrustum as PerspectiveFrustum}  from '@math.gl/culling';
+import { _PerspectiveFrustum as PerspectiveFrustum } from '@math.gl/culling';
 import { Matrix4 as MathGLMatrix4, toRadians } from '@math.gl/core';
 import { Ellipsoid } from '@math.gl/geospatial';
 import * as Util from './util';
@@ -26,6 +26,8 @@ import {
   BufferAttribute,
   Points,
   Camera,
+  PerspectiveCamera,
+  OrthographicCamera,
   Texture,
   Euler,
   Quaternion,
@@ -41,13 +43,13 @@ import { Gradients } from './gradients';
 
 import { PointCloudFS, PointCloudVS } from './shaders';
 
-import type { 
-  LoaderProps, 
-  LoaderOptions, 
-  Runtime, 
-  GeoCoord, 
-  GeoJSONLoaderProps, 
-  FeatureToColor, 
+import type {
+  LoaderProps,
+  LoaderOptions,
+  Runtime,
+  GeoCoord,
+  GeoJSONLoaderProps,
+  FeatureToColor,
   DrapingShaderOptions,
   Viewport
 } from './types';
@@ -68,7 +70,7 @@ const defaultOptions: LoaderOptions = {
   maximumScreenSpaceError: 16,
   memoryAdjustedScreenSpaceError: true,
   maximumMemoryUsage: 400,
-  memoryCacheOverflow : 128,
+  memoryCacheOverflow: 128,
   viewDistanceScale: 1.0,
   skipLevelOfDetail: false,
   resetTransform: false,
@@ -99,7 +101,7 @@ class Loader3DTiles {
   * @returns An object containing the 3D Model to be added to the scene
   * and a runtime engine to be updated every frame.
   */
-  public static async load (props: LoaderProps): Promise<{ model: Object3D; runtime: Runtime }> {
+  public static async load(props: LoaderProps): Promise<{ model: Object3D; runtime: Runtime }> {
     const options = { ...defaultOptions, ...props.options };
 
     const { url } = props;
@@ -108,7 +110,7 @@ class Loader3DTiles {
     const UPDATE_INTERVAL = options.updateInterval;
     const MAX_DEPTH_FOR_ORIENTATION = 5;
 
-    const loadersGLOptions: {[key: string]: unknown} = {};
+    const loadersGLOptions: { [key: string]: unknown } = {};
 
     if (options.cesiumIONToken) {
       loadersGLOptions['cesium-ion'] = {
@@ -119,8 +121,8 @@ class Loader3DTiles {
     }
 
     if (options.googleApiKey) {
-      loadersGLOptions['fetch'] = { headers: { 'X-GOOG-API-KEY': options.googleApiKey} };
-      if (!props.options.hasOwnProperty('collectAttributions')) {  
+      loadersGLOptions['fetch'] = { headers: { 'X-GOOG-API-KEY': options.googleApiKey } };
+      if (!props.options.hasOwnProperty('collectAttributions')) {
         options.collectAttributions = true;
       }
     }
@@ -168,7 +170,7 @@ class Loader3DTiles {
       transparent: options.transparent,
       vertexColors: true
     });
-    
+
     let gltfLoader = undefined;
     let ktx2Loader = undefined;
     let dracoLoader = undefined;
@@ -195,8 +197,8 @@ class Loader3DTiles {
         gltfLoader.setDRACOLoader(dracoLoader);
       }
     }
-    
-    const unlitMaterial = new MeshBasicMaterial({transparent: options.transparent});
+
+    const unlitMaterial = new MeshBasicMaterial({ transparent: options.transparent });
 
     const tileOptions = {
       maximumMemoryUsage: options.maximumMemoryUsage,
@@ -318,7 +320,7 @@ class Loader3DTiles {
     let sseDenominator = null;
 
     root.updateMatrixWorld(true);
-    const lastRootTransform:Matrix4 = new Matrix4().copy(root.matrixWorld)
+    const lastRootTransform: Matrix4 = new Matrix4().copy(root.matrixWorld)
     const rootTransformInverse = new Matrix4().copy(lastRootTransform).invert();
 
     if (options.resetTransform) {
@@ -336,28 +338,28 @@ class Loader3DTiles {
       }
       const halfAxes = tile.boundingVolume.halfAxes;
       const orientationMatrix = new Matrix4()
-      .extractRotation(Util.getMatrix4FromHalfAxes(halfAxes))
-      .premultiply(new Matrix4().extractRotation(rootTransformInverse));
+        .extractRotation(Util.getMatrix4FromHalfAxes(halfAxes))
+        .premultiply(new Matrix4().extractRotation(rootTransformInverse));
 
       const rotation = new Euler().setFromRotationMatrix(orientationMatrix);
 
       if (!rotation.equals(new Euler())) {
         orientationDetected = true;
         const pos = new Vector3(
-          tileTransform.elements[12], 
-          tileTransform.elements[13], 
+          tileTransform.elements[12],
+          tileTransform.elements[13],
           tileTransform.elements[14])
-        ;
+          ;
         tileTransform.extractRotation(orientationMatrix);
         tileTransform.setPosition(pos);
-      } 
+      }
       updateTransform();
     }
 
     function updateTransform() {
       // Reset the current model matrix and apply our own transformation
       threeMat.copy(lastRootTransform);
-      
+
       if (options.resetTransform) {
         threeMat.multiply(new Matrix4().copy(tileTransform).invert());
       }
@@ -369,15 +371,24 @@ class Loader3DTiles {
         return;
       }
       // Assumes camera fov, near and far are not changing
-      if (!sseDenominator) {
-        const loadersFrustum = new PerspectiveFrustum({
-          fov: (camera.fov / 180) * Math.PI,
-          aspectRatio: camera.aspect,
-          near: camera.near,
-          far: camera.far,
-        });
+      if (!sseDenominator || camera.aspect != lastCameraAspect) {
+        if (camera instanceof PerspectiveCamera) {
+          const loadersFrustum = new PerspectiveFrustum({
+            fov: (camera.fov / 180) * Math.PI,
+            aspectRatio: camera.aspect,
+            near: camera.near,
+            far: camera.far,
+          });
+          sseDenominator = loadersFrustum.sseDenominator;
 
-        sseDenominator = loadersFrustum.sseDenominator;
+        } else if (camera instanceof OrthographicCamera) {
+          const width = camera.right - camera.left;
+          const height = camera.top - camera.bottom;
+          const aspect = width / height;
+
+          sseDenominator = Math.max(height / viewportHeight, width / (viewportHeight * aspect));
+        }
+        lastCameraAspect = camera.aspect;
 
         if (options.debug) {
           console.log('Updated sse denonimator:', sseDenominator);
@@ -444,14 +455,14 @@ class Loader3DTiles {
       }
 
       if (props.loadingManager && !loadingEnded) {
-        if (tilesLoading == 0 && 
-           (
+        if (tilesLoading == 0 &&
+          (
             options.preloadTilesCount == null ||
             tilesLoaded >= options.preloadTilesCount)
-           ) {
-             loadingEnded = true;
-             props.loadingManager.itemEnd(props.url);
-           }
+        ) {
+          loadingEnded = true;
+          props.loadingManager.itemEnd(props.url);
+        }
       }
 
       return frameState;
@@ -478,7 +489,7 @@ class Loader3DTiles {
       rootTransformInverse.copy(lastRootTransform).invert();
 
       updateTransform();
-      
+
     }
 
     return {
@@ -560,11 +571,11 @@ class Loader3DTiles {
           ]);
           return new Vector3(...cartesianPosition).applyMatrix4(threeMat);
         },
-        orientToGeocoord: (coord:GeoCoord) => {
+        orientToGeocoord: (coord: GeoCoord) => {
           // Set the transofrmation matrix to the rotate the WGS84 globe to the given lat/long/Alt
           const cartographicPosition = [coord.long, coord.lat, coord.height];
 
-          const cartesianPosition:number[] = tileset.ellipsoid.cartographicToCartesian(cartographicPosition);
+          const cartesianPosition: number[] = tileset.ellipsoid.cartographicToCartesian(cartographicPosition);
           const ellipsoidTransform = new Matrix4().fromArray(tileset.ellipsoid.eastNorthUpToFixedFrame(cartesianPosition));
 
           // Flip to Z is altitiude, Y is north, X is east
@@ -576,7 +587,7 @@ class Loader3DTiles {
 
           setGeoTransformation(geoTransform);
         },
-        getWebMercatorCoord: (coord:GeoCoord): Vector2 => {
+        getWebMercatorCoord: (coord: GeoCoord): Vector2 => {
           return Util.datumsToSpherical(coord.lat, coord.long);
         },
         getCameraFrustum: (camera: Camera) => {
@@ -629,13 +640,13 @@ class Loader3DTiles {
               timer = 0;
               lastRootTransform.copy(root.matrixWorld);
               if (options.updateTransforms) {
-                  updateTransform();
+                updateTransform();
               }
 
               const rootCenter = new Vector3().setFromMatrixPosition(lastRootTransform);
               pointcloudUniforms.rootCenter.value.copy(rootCenter);
               pointcloudUniforms.rootNormal.value.copy(new Vector3(0, 0, 1).applyMatrix4(lastRootTransform).normalize());
-              rootTransformInverse.copy(lastRootTransform).invert(); 
+              rootTransformInverse.copy(lastRootTransform).invert();
 
               if (options.debug) {
                 boxMap[tileset.root.id].matrixWorld.copy(threeMat);
@@ -647,9 +658,9 @@ class Loader3DTiles {
               lastCameraTransform = new Matrix4().copy(camera.matrixWorld);
             } else {
               if (
-                needsUpdate || 
+                needsUpdate ||
                 cameraChanged(camera, lastCameraTransform)
-            ) {
+              ) {
                 timer = 0;
                 needsUpdate = false;
                 tileset._frameNumber++;
@@ -692,49 +703,49 @@ class Loader3DTiles {
   * @param props - Properties for this load call {@link GeoJSONLoaderProps}.
   * @returns An object containing the 3D Model to be added to the scene
   */
-  public static async loadGeoJSON(props: GeoJSONLoaderProps): Promise <Object3D> {
-    const { url, height, featureToColor } = props; 
-    return load(url, _GeoJSONLoader, { worker: false,  gis: {format: 'binary'}}).then((data) => {  
-        const featureCollection = data as unknown as BinaryFeatureCollection;
-        const geometry = new BufferGeometry();
-        const cartesianPositions = (featureCollection.polygons.positions.value as Float32Array).reduce((acc, val, i, src) => {
-          if (i % 2 == 0) {
-            const cartographic = [val, src[i + 1], height ?? 0];
-            const cartesian = Ellipsoid.WGS84.cartographicToCartesian(cartographic);
+  public static async loadGeoJSON(props: GeoJSONLoaderProps): Promise<Object3D> {
+    const { url, height, featureToColor } = props;
+    return load(url, _GeoJSONLoader, { worker: false, gis: { format: 'binary' } }).then((data) => {
+      const featureCollection = data as unknown as BinaryFeatureCollection;
+      const geometry = new BufferGeometry();
+      const cartesianPositions = (featureCollection.polygons.positions.value as Float32Array).reduce((acc, val, i, src) => {
+        if (i % 2 == 0) {
+          const cartographic = [val, src[i + 1], height ?? 0];
+          const cartesian = Ellipsoid.WGS84.cartographicToCartesian(cartographic);
 
-            acc.push(...cartesian);
-          }
+          acc.push(...cartesian);
+        }
+        return acc;
+      }, []);
+      geometry.setAttribute('position', new Float32BufferAttribute(
+        cartesianPositions,
+        3
+      ));
+      if (featureToColor) {
+        const colors = ((featureCollection.polygons.numericProps as any)
+        [featureToColor.feature].value as Array<number>).reduce((acc, val, i, src) => {
+          const color = featureToColor.colorMap(val);
+          acc[i * 3] = color.r;
+          acc[(i * 3) + 1] = color.g;
+          acc[(i * 3) + 2] = color.b;
           return acc;
         }, []);
-        geometry.setAttribute('position', new Float32BufferAttribute(
-          cartesianPositions,
+        geometry.setAttribute('color', new Float32BufferAttribute(
+          colors,
           3
         ));
-        if (featureToColor) {
-          const colors = ((featureCollection.polygons.numericProps as any)
-          [featureToColor.feature].value as Array<number>).reduce((acc, val, i, src) => {
-              const color = featureToColor.colorMap(val);
-              acc[i * 3] = color.r;
-              acc[(i *3) + 1] = color.g;
-              acc[(i *3) + 2] = color.b;
-              return acc;
-          }, []);
-          geometry.setAttribute('color', new Float32BufferAttribute(
-            colors,
-            3
-          ));
-        }
-        geometry.setIndex(
-          new BufferAttribute(featureCollection.polygons.triangles.value, 1)
-        );
-        const material = new MeshBasicMaterial({
-          transparent: true, 
-          vertexColors: true,
-          opacity: 0.5, 
-          blending: NormalBlending
-        });
-        const mesh = new Mesh( geometry, material );
-        return mesh;
+      }
+      geometry.setIndex(
+        new BufferAttribute(featureCollection.polygons.triangles.value, 1)
+      );
+      const material = new MeshBasicMaterial({
+        transparent: true,
+        vertexColors: true,
+        opacity: 0.5,
+        blending: NormalBlending
+      });
+      const mesh = new Mesh(geometry, material);
+      return mesh;
     });
   }
 }
@@ -760,13 +771,13 @@ async function createGLTFNodes(gltfLoader, tile, unlitMaterial, options, rootTra
 
     gltfLoader.parse(
       tile.content.gltfArrayBuffer,
-      tile.contentUrl ? tile.contentUrl.substr(0,tile.contentUrl.lastIndexOf('/') + 1) : null,
+      tile.contentUrl ? tile.contentUrl.substr(0, tile.contentUrl.lastIndexOf('/') + 1) : null,
       (gltf) => {
         tile.userData.asset = gltf.asset;
-        
+
         const tileContent = gltf.scenes[0] as Group;
-        tileContent.applyMatrix4(contentTransform); 
-      
+        tileContent.applyMatrix4(contentTransform);
+
         // Memory usage 
         tile.content.texturesByteLength = 0;
         tile.content.geometriesByteLength = 0;
@@ -797,7 +808,7 @@ async function createGLTFNodes(gltfLoader, tile, unlitMaterial, options, rootTra
 
             if (options.shading != Shading.ShadedNoTexture) {
               if ((mesh.material as Material).type == "ShaderMaterial") {
-                 (mesh.material as ShaderMaterial).uniforms.map = { value: originalMap };
+                (mesh.material as ShaderMaterial).uniforms.map = { value: originalMap };
               } else {
                 (mesh.material as MeshStandardMaterial).map = originalMap;
               }
@@ -898,12 +909,12 @@ function disposeNode(node) {
       object.geometry.dispose();
 
       if (object.material.isMaterial) {
-        disposeMaterial(object.material);   
+        disposeMaterial(object.material);
       } else {
         // an array of materials
         for (const material of object.material) {
           disposeMaterial(material);
-        } 
+        }
       }
     }
   });
@@ -913,13 +924,22 @@ function disposeNode(node) {
   }
 }
 
-function cameraChanged(camera:Camera, lastCameraTransform:Matrix4) {
-  return !camera.matrixWorld.equals(lastCameraTransform);
+function cameraChanged(camera: Camera, lastCameraTransform: Matrix4, lastCameraAspect?: number) {
+  // check if camera position changed
+  const positionChanged = !camera.matrixWorld.equals(lastCameraTransform);
+
+  // if camera is Perspective, check camera aspect also
+  if (camera instanceof PerspectiveCamera) {
+    return positionChanged || camera.aspect !== lastCameraAspect;
+  }
+
+  // check only position for Orthographic camera
+  return positionChanged;
 }
 
 function collectAttributions(tiles) {
   // attribution guidelines: https://developers.google.com/maps/documentation/tile/create-renderer#display-attributions
-  
+
   const copyrightCounts = new Map(); // Use a Map to keep track of counts
 
   tiles.forEach(tile => {
@@ -944,14 +964,14 @@ function collectAttributions(tiles) {
 }
 
 export {
-   Loader3DTiles, 
-   PointCloudColoring, 
-   Shading, 
-   Runtime, 
-   GeoCoord, 
-   FeatureToColor, 
-   LoaderOptions, 
-   LoaderProps,
-   GeoJSONLoaderProps,
-   DrapingShaderOptions
+  Loader3DTiles,
+  PointCloudColoring,
+  Shading,
+  Runtime,
+  GeoCoord,
+  FeatureToColor,
+  LoaderOptions,
+  LoaderProps,
+  GeoJSONLoaderProps,
+  DrapingShaderOptions
 };
