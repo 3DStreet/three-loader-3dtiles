@@ -371,7 +371,7 @@ class Loader3DTiles {
         return;
       }
       // Assumes camera fov, near and far are not changing
-      if (!sseDenominator || camera.aspect != lastCameraAspect) {
+      if (!sseDenominator) {
         if (camera instanceof PerspectiveCamera) {
           const loadersFrustum = new PerspectiveFrustum({
             fov: (camera.fov / 180) * Math.PI,
@@ -386,9 +386,8 @@ class Loader3DTiles {
           const height = camera.top - camera.bottom;
           const aspect = width / height;
 
-          sseDenominator = Math.max(height / viewportHeight, width / (viewportHeight * aspect));
+          sseDenominator = Math.max(height / viewport.height, width / (viewport.height * aspect));
         }
-        lastCameraAspect = camera.aspect;
 
         if (options.debug) {
           console.log('Updated sse denonimator:', sseDenominator);
